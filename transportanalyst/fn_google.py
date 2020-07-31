@@ -73,7 +73,7 @@ def google_route(
     
     columns = cs.columns
     
-    if date_time = '':
+    if date_time == '':
         date_time = datetime.now()
     directions_result = gmaps.directions(
         origin = origin,
