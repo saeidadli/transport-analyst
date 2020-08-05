@@ -1,8 +1,86 @@
+"""
+Uses Here API to preform network analysis.
+"""
 import pandas as pd
 import geopandas as gpd
 import requests
 
 from shapely import geometry
+from datetime import datetime
+
+from . import constants as cs
+
+def here_route(
+    in_gdf, 
+    mode,
+    date_time = '',
+    trip_name = '',
+    api_key='', 
+    result = 'detailed',
+):
+    
+    """
+    Get directions between an origin point and a destination point. 
+    Parameters
+    ----------
+    in_gdf : GeoDataFrame
+        It should only contain two records, first record is origina and
+        the second record is destination. If more than two records only
+        the first and the last records are considered.
+    mode : string
+        A transport mode that can be 'public_transport', 'car_in_traffic',
+        'car_free_flow', 'walk', 'cycle'.
+    date_time : a datetime object
+        Sets the start time of a trip. Only important if the mode is 
+        transit or a subset of transit.
+    trip_name : string
+        gives the trip a name which is stored in the trip_name in output
+        GeoDataFrame.
+    api_key : string
+        api key.
+
+    Returns
+    -------
+    GeoDataFrame
+        Has the structure
+        -``mode``: the travel mode for this route.
+        -``date and time``: the date and time of travel.
+        -``duration``: the duration of travel in minutes.
+        -``geometry``: the geometry of the trip.
+    """
+    # The mode parameter is not validated by the Maps API
+    # Check here to prevent silent failures.
+    if mode not in list(cs.here_modes.keys()):
+        raise ValueError("{0} is an invalid travel mode.".format(mode))
+
+    if in_gdf.crs['init'] not in cs.WGS84['init']:
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
+    
+    waypoints = dict()
+    for i, p in enumerate(in_gdf['geometry'].tolist()):
+        waypoints['waypoint{0}'.format(i)] = '{0},{1}'.format(p.y, p.x)
+    
+    if date_time == '':
+        date_time = datetime.now()
+        
+    date_time = date_time.strftime('%Y-%m-%dT%H:%M:00')
+    
+    url = 'https://route.ls.hereapi.com/routing/7.2/calculateroute.json'
+    query = {
+        "mode":cs.here_modes[mode],
+        "departure": date_time,
+        "apiKey": api_key,
+    }
+    query = {**query, **waypoints}
+    print(query)
+    r = requests.get(url, params=query)
+    
+    output = r.json()
+    
+    #out_gdf = gpd.GeoDataFrame(r.json()['route'])
+      
+    return output
 
 def iso_drive(
     date_time,
@@ -74,4 +152,4 @@ def iso_drive(
             g = geometry.Polygon([[float(i) for i in reversed(i.split(','))] for i in iso_list])
         else:
             g = geometry.Polygon()
-        return g
+    return g

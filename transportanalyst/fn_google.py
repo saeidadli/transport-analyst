@@ -4,6 +4,7 @@ Uses Google API to preform network analysis.
 
 import json
 from datetime import datetime
+
 import googlemaps
 
 import pandas as pd
@@ -151,9 +152,9 @@ def google_route(
                 
                 simple_df_list.append(simple_df[columns].copy())
     if result == 'simple':
-        gdf = gpd.GeoDataFrame(pd.concat(simple_df_list))
+        gdf = gpd.GeoDataFrame(pd.concat(simple_df_list), crs=cs.WGS84)
     elif result == 'detailed':
-        gdf = gpd.GeoDataFrame(pd.concat(df_list))
+        gdf = gpd.GeoDataFrame(pd.concat(df_list), crs=cs.WGS84)
       
     return gdf
 

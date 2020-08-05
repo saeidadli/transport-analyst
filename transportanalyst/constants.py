@@ -35,6 +35,15 @@ google_modes = {
     'cycle': 'bicycling',    
 }
 
+here_modes = {
+    'drive_intraffic': 'fastest;car;traffic:enabled',
+    'drive_freeflow': 'fastest;car;traffic:disabled',
+    'public_transport': 'fastest;publicTransport',
+    'walk': 'fastest;pedestrian',
+    'cycle':'fastest;bicycle',
+    'truck':'fastest;truck',
+}
+
 otp_modes = {
     'public_transport': 'TRANSIT,WALK',
     'car_free_flow': 'CAR',
