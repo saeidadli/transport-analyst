@@ -20,6 +20,7 @@ from pathlib import Path
 from googlemaps.convert import decode_polyline
 
 from . import constants as cs
+from . import fn_general as gf
 
 #=====================api functions====================================
 def otp_route(
@@ -37,7 +38,7 @@ def otp_route(
         the second record is destination. If more than two records only
         the first two records are considered.
     mode : string
-        A list of different transport modes. Modes that can be used 
+        Indicates transport modes. Modes that can be used 
         include 'public_transport', 'car_in_traffic', 'car_free_flow',
         'walk', 'cycle'
     trip_name : string
@@ -100,12 +101,6 @@ def otp_route(
         "mode":cs.otp_modes[mode],
     }
 
-#         some other controls
-#         "maxWalkDistance":"1000",
-#         "arriveBy":"false",
-#         "wheelchair":"false",
-#         "locale":"en"
-
     r = requests.get(url, params=query)
     
     #check for request error
@@ -115,7 +110,6 @@ def otp_route(
     if not 'error' in r.json():
 
         #convert request output ot a GeoDataFrame
-        #legs = r.json()['plan']['itineraries'][0]['legs']
         df = pd.DataFrame(r.json()['plan']['itineraries'][0]['legs']).reset_index()
         df = df.rename(columns={
             'index': 'leg_id', 
@@ -157,16 +151,17 @@ def otp_route(
         gdf = gpd.GeoDataFrame(df, crs = cs.WGS84)
     else:
         gdf = gpd.GeoDataFrame()
-
+    
+    gdf = gdf[gdf['geometry'].notnull()].copy()
     return gdf
 
-def service_area(
+def otp_service_area(
     in_gdf, 
-    id_field = '',
-    mode = "TRANSIT,WALK", 
-    breaks = [10, 20], #in minutes
-    date_time = datetime.now(),
-    control_vars = dict()): # a dictionary of control variables
+    mode, 
+    breaks,
+    id_field ='',
+    date_time = '',
+): 
     
     """
     Return a GeoDataFrame of catchments for each point in 'in_gdf'.
@@ -179,29 +174,42 @@ def service_area(
         id_field is the name of the field in 'in_gdf' that contains
         the ids for each origin. Each point has to have a unique id.
     mode : string
-        Similar to the ``route`` function.
+        Indicates transport modes. Modes that can be used 
+        include 'public_transport', 'car_in_traffic', 'car_free_flow',
+        'walk', 'cycle'
     breaks : list
         A list of time breaks in minutes. A catchment for each time break
         will be created for each origin.
-    date_time : datetime object
-        Similar to the ``route`` function. 
-    control_vars : dictionanry
-        Similar to the ``route`` function.
+    date_time : a datetime object
+        Sets the start time of a trip. Only important if the mode is 
+        transit or a subset of transit. 
+
     Returns
     -------
     GeoDataFrame
         Has the structure
-        time -> time break for the isochrone in seconds.
-        geometry -> Shaply polygon geometry
-        name -> name of the origin from the input 'id_field'.
+        -``time`` time break for the isochrone in seconds.
+        -``geometry`` Shaply polygon geometry
+        -``name`` name of the origin from the input 'id_field'.
+
     """
+    if not id_field:
+        in_gdf = in_gdf.reset_index()
+        in_gdf = in_gdf.rename(columns={
+            'index': 'id_field',  
+        })
+        id_field = 'id_field'
+        
+    if mode not in list(cs.otp_modes.keys()):
+        raise ValueError("{0} is an invalid travel mode.".format(mode))
+        
     
-    #convert the geometry into a list of dictinoaries
-    if not in_gdf.crs:
-        print('please define projection for the input gdfs')
-        sys.exit()
-    
-    in_gdf = in_gdf.to_crs({'init': 'epsg:4326'})
+    if in_gdf.crs['init'] not in cs.WGS84['init']:
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
+        
+    if not date_time:
+        date_time = datetime.now()
     
     #convert time into text
     t = date_time.strftime("%H:%M%p")
@@ -211,52 +219,48 @@ def service_area(
     url = 'http://localhost:8080/otp/routers/default/isochrone'
     iso_list = list()
     for row in in_gdf.iterrows():
-        try:
-            indx = row[0]
-            orig = row[1]['geometry']
+        indx = row[0]
+        orig = row[1]['geometry']
 
+        #convert origin from shapely to text
+        orig_text = "{0}, {1}".format(orig.y, orig.x)
 
-            #convert origin from shapely to text
-            orig_text = "{0}, {1}".format(orig.y, orig.x)
+        #send query to api
+        query = {
+            "fromPlace":orig_text,
+            "date":d,
+            "time":t,
+            "mode":cs.otp_modes[mode],
+            "cutoffSec":[x*60 for x in breaks],
+        }
+        r = requests.get(url, params=query)
 
-            #send query to api
-            query = {
-                "fromPlace":orig_text,
-                "date":d,
-                "time":t,
-                "mode":mode,
-                "cutoffSec":[x*60 for x in breaks]}
-            
-            query = {**query, **control_vars}
+        if 'zip' in r.headers['Content-Type']:
+            z = zipfile.ZipFile(io.BytesIO(r.content))
+            tmp_dir = tempfile.TemporaryDirectory()
+            z.extractall(tmp_dir.name)
+            shapefiles = list()
+            for f in Path(tmp_dir.name).glob("*.shp"):
+                shapefiles.append(f)
+            iso_gdf = gpd.read_file(str(shapefiles[0]))
+            tmp_dir.cleanup()
+        elif r.json():
+            iso_gdf = gpd.GeoDataFrame.from_features(r.json()['features'])
+        else:
+            iso_gdf = gpd.GeoDataFrame()
 
-            r = requests.get(url, params=query)
-            print(r.headers)
-            
-            if 'zip' in r.headers['Content-Type']:
-                z = zipfile.ZipFile(io.BytesIO(r.content))
-                tmp_dir = tempfile.TemporaryDirectory()
-                z.extractall(tmp_dir.name)
-                shapefiles = list()
-                for f in Path(tmp_dir.name).glob("*.shp"):
-                    shapefiles.append(f)
-                iso_gdf = gpd.read_file(str(shapefiles[0]))
-                tmp_dir.cleanup()
-            else:
-                iso_gdf = gpd.GeoDataFrame.from_features(r.json()['features'])
-                
-            if id_field:
-                iso_gdf['name'] = row[1][id_field]
-            
-            iso_list.append(iso_gdf)
-        except Exception as e: print(e)
+        iso_gdf['name'] = row[1][id_field]
+
+        iso_list.append(iso_gdf)
+
     if iso_list:
-        out_gdf = pd.concat(iso_list)   
-        out_gdf = out_gdf[out_gdf['geometry'].notnull()].copy()
-        out_gdf = gpd.GeoDataFrame(out_gdf, crs = {'init': 'epsg:4326'}).copy()
+        df = pd.concat(iso_list)   
+        df = df[df['geometry'].notnull()].copy()
+        gdf = gpd.GeoDataFrame(df, crs = cs.WGS84).copy()
     else:
-        out_gdf = gpd.GeoDataFrame(crs = {'init': 'epsg:4326'})
+        gdf = gpd.GeoDataFrame(crs = cs.WGS84)
     
-    return out_gdf.reset_index(drop = True)
+    return gdf.reset_index(drop = True)
 
 def od_matrix(
     origins,
@@ -266,7 +270,7 @@ def od_matrix(
     destinations_name,
     max_travel_time = 60,
     date_time = datetime.now(),
-    control_vars = dict()): # a dictionary of control variables
+): # a dictionary of control variables
     """
     Return a GeoDataFrame with detailed trip information for the best option.
     Parameters
@@ -276,17 +280,19 @@ def od_matrix(
     destinations : GeoDataFrame
         It should only contain a series of points.
     mode : string
-        Similar to the ``route`` function.
+        Indicates transport modes. Modes that can be used 
+        include 'public_transport', 'car_in_traffic', 'car_free_flow',
+        'walk', 'cycle'
     origins_name : string
         gives the origin a name which is stored in the ``trip_name`` in output
         GeoDataFrame.
     max_travel_time : integer
         maximum travel time from each origin in minutes. Use ``None`` to disable
         it.
-    date_time : datetime object
-        Similar to the ``route`` function. 
-    control_vars : dictionanry
-        Similar to the ``route`` function.
+    date_time : a datetime object
+        Sets the start time of a trip. Only important if the mode is 
+        transit or a subset of transit.  
+
     Returns
     -------
     GeoDataFrame
@@ -343,7 +349,7 @@ def od_matrix(
                 mode = mode,
                 trip_name = 'from {0} to {1}'.format(o[2], d[2]),
                 date_time = date_time,
-                control_vars = control_vars)
+            )
             od_list.append(r)
             
         cnt += 1
@@ -359,9 +365,91 @@ def od_matrix(
 
     
     
+def otp_accessibility(
+    census,
+    fields,
+    mode,
+    travel_time,
+    date_time = '',
+    show_progress = True,
+):
+    """
+    Adds accessiblity data to inuput census GeoDataFrame.
+    Parameters
+    ----------
+    in_gdf : GeoDataFrame
+        Contains census zone boundaries. The attribute data should have
+        number of jobs for each zone.
+    fields : A list of names of numerical fieds in census GeoDataFrame
+        fields are the name of the fields in 'in_gdf' that contains numerical
+        information such as total jobs for each zone.
+    mode : string
+        Indicates the mode of transport. It can include walk, cycle,
+        public_transport.
+    travel_time : minutes
+        A time break in minutes. Shows maximum time someone is allowed to travel
+        to access a destination.
+    date_time : a datetime object
+        Sets the start time of a trip. Only important if the mode is 
+        transit or a subset of transit.  
+
+    Returns
+    -------
+    GeoDataFrame
+        Has the ``census`` structure and only adds one more field:
+        -``accessiblity`` total jobs available for each zone in the sepcified
+        time of day, the speficified mode and the specified travel time.
+    """
+
+     
+    if mode not in list(cs.otp_modes.keys()):
+        raise ValueError("{0} is an invalid travel mode.".format(mode))
+        
     
+    if census.crs['init'] not in cs.WGS84['init']:
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
+        
+    if not date_time:
+        date_time = datetime.now()
+        
+    census['centroid'] = census.centroid
     
-    
+    def accessibility(row):
+        o = row['centroid']
+        gdf = gpd.GeoDataFrame({'geometry':[o]}, crs = cs.WGS84)
+
+        sa = otp_service_area(
+            in_gdf = gdf,
+            mode = mode, 
+            breaks = [travel_time],
+            date_time = date_time,
+        )
+        
+        emp = gf.catchment_pop(
+            catchment = sa,
+            census = census, 
+            fields = fields,
+            show_progress = False,
+        )
+
+        if not emp.empty:
+            emp = emp[fields].iloc[0]
+        if emp.empty:
+            emp = pd.Series(dict.fromkeys(fields, 0))
+        
+        progress = (row.name+1)/len(census)*100
+        if show_progress == True and round(progress, 0)%10==0:
+            print('{0}% is done.'.format(round(progress, 1)))        
+        return emp
+
+
+    columns = ['{0}_{1}_{2}'.format(mode, date_time.strftime('%Y%m%d_%H%M'), f) for f in fields]
+    df = census.apply(accessibility, axis=1)
+    df.columns = columns
+    census = census.join(df).copy()
+   
+    return census
     
     
     

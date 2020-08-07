@@ -11,7 +11,12 @@ from shapely import geometry
 
 
 
-def catchment_pop(catchment, census, fields):
+def catchment_pop(
+    catchment, 
+    census, 
+    fields,
+    show_progress = True,
+):
     """
     ``fields`` are usually population or employment data from census. 
     Calculates the how many people work or live in the catchment areas and
@@ -42,7 +47,10 @@ def catchment_pop(catchment, census, fields):
         raise ValueError("Input GeoDataFrame must have a cooridnate system.")
         
     catchment = catchment.to_crs({'init': 'epsg:4326'}) #Convert CRS to WGS84
-    catchment.insert(0, '__uid__', range(0, len(catchment))) #Add a unique filed ID
+    if '__uid__' not in catchment.columns: #Add a unique filed ID
+        catchment.insert(0, '__uid__', range(0, len(catchment)))
+    else:
+        catchment['__uid__'] = range(0, len(catchment))
     
     census = census.to_crs({'init': 'epsg:4326'}) #Convert CRS to WGS84
     census['__orig_area__'] = census['geometry'].area #Add a unique filed ID
@@ -52,28 +60,32 @@ def catchment_pop(catchment, census, fields):
     results_list = list()
     step = 10
     for i in range(0, catchments_cnt, step):
-        try:
-            #process a batch of 100 catchments - intersects each catchment with the SA1 polygons
-            intersect = gpd.overlay(catchment.iloc[i:i+step, :], census, how='intersection')
-            intersect['__area__']= intersect['geometry'].area
+#         try:
+        #process a batch of 100 catchments - intersects each catchment with the SA1 polygons
+        intersect = gpd.overlay(catchment.iloc[i:i+step, :], census, how='intersection')
+        intersect['__area__']= intersect['geometry'].area
 
-            #recalculate fields - intersected area/orignal area coverage
-            for field in fields:
-                intersect[field] = intersect['__area__']/intersect['__orig_area__']*intersect[field]
+        #recalculate fields - intersected area/orignal area coverage
+        for field in fields:
+            intersect[field] = intersect['__area__']/intersect['__orig_area__']*intersect[field]
 
-            #group by SA1 and aggregate results
-            result_df = intersect.groupby('__uid__').agg(agg_dict).reset_index()
-            
-            results_list.append(result_df)
-            progress = round((i+step)/catchments_cnt*100, 1)
-            progress = 100 if progress>100 else progress
+        #group by SA1 and aggregate results
+        result_df = intersect.groupby('__uid__').agg(agg_dict).reset_index()
 
+        results_list.append(result_df)
+        progress = round((i+step)/catchments_cnt*100, 1)
+        progress = 100 if progress>100 else progress
+
+        if show_progress == True:
             print('{0}% is done.'.format(progress))
-        except Exception as e: print(e)
-        
-    result_df = pd.concat(results_list)
-    output = catchment.merge(result_df, how='left')
-    output = output.drop(['__uid__'], axis=1)
+#         except Exception as e: print(e)
+
+    if results_list:
+        result_df = pd.concat(results_list)
+        output = catchment.merge(result_df, how='left')
+        output = output.drop(['__uid__'], axis=1)
+    else:
+        output = pd.DataFrame()
     return output
 
 
@@ -133,7 +145,6 @@ def accessibility(
             api_key = api_key,
         )
 
-        print(g)
         catchment = gpd.GeoDataFrame(g)
         catchment = catchment_pop(catchment, census_gdf, fields)
 
