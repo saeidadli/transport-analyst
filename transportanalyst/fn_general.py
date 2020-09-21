@@ -6,7 +6,12 @@ import pandas as pd
 import geopandas as gpd
 import requests
 
+from datetime import datetime
 from shapely import geometry
+
+from . import fn_otp
+from . import fn_here
+from . import constants as cs
 
 
 
@@ -46,13 +51,19 @@ def catchment_pop(
         # Check the cooridnate system
         raise ValueError("Input GeoDataFrame must have a cooridnate system.")
         
-    catchment = catchment.to_crs({'init': 'epsg:4326'}) #Convert CRS to WGS84
+    if catchment.crs['init'] not in cs.WGS84['init']:
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
+        
+    if census.crs['init'] not in cs.WGS84['init']:
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
+        
     if '__uid__' not in catchment.columns: #Add a unique filed ID
         catchment.insert(0, '__uid__', range(0, len(catchment)))
     else:
         catchment['__uid__'] = range(0, len(catchment))
     
-    census = census.to_crs({'init': 'epsg:4326'}) #Convert CRS to WGS84
     census['__orig_area__'] = census['geometry'].area #Add a unique filed ID
     
     #intersect the catchment individually with the census to avoid any data losses
@@ -92,67 +103,104 @@ def catchment_pop(
        
 
 def accessibility(
-    census_gdf,
+    census,
     fields,
-    date_time,
-    travel_ranges, #minutes
-    modes,
-    api = '',
+    mode,
+    travel_time,
+    api,
     api_key = '',
+    date_time = '',
+    show_progress = True,
 ):
     """
-    Calculates the how many people work or live in a certain time by certian travel range
-    and certain modes of transport. The input census geodataframe should include socio-economic
-    data.
-
+    Adds accessiblity data to inuput census GeoDataFrame.
     Parameters
     ----------
-    census_gdf : GeoDataFrame
-        It is a GeoDataFrame of census zones.
-    fields : List of field names,
-        A list of numerical field names that include socio economic data (usually total jobs
-        in the census zones).
-    date_time : A string that shows data and time for the analysis.
-        The format should be "yyyymmdd hhmm".
-    travel_range : A list of times in minutes.
-        The list can also be generated automatically by a code for example: ``list(range(5, 65,5))``
-        generats a list of every 5 minutes from 5 to 60 minutes.
-    modes : list of all travel modes.
-        The list can include: drive_intraffic, drive_freeflow, walk, cycle, truck.
-    api: string.
-        The api used for routing.
-    api_key: API key is a key for Here API.
-        More information is available here:
-        
+    in_gdf : GeoDataFrame
+        Contains census zone boundaries. The attribute data should have
+        number of jobs for each zone.
+    fields : A list of names of numerical fieds in census GeoDataFrame
+        fields are the name of the fields in 'in_gdf' that contains numerical
+        information such as total jobs for each zone.
+    mode : string
+        Indicates the mode of transport. It can include walk, cycle,
+        public_transport.
+    travel_time : minutes
+        A time break in minutes. Shows maximum time someone is allowed to travel
+        to access a destination.
+    api : string
+        Defines the api that should be used for routing. 
+        The avialable apis are otp, here and google
+    date_time : a datetime object
+        Sets the start time of a trip. Only important if the mode is 
+        transit or a subset of transit.  
 
     Returns
     -------
     GeoDataFrame
-        Has the structure
-        All coulumns that already exists in census_gdf. The accessiblity fields are added.
-        An example of field names is: POW_20200305_0800_30min_drive_intraffic
+        Has the ``census`` structure and only adds one more field:
+        -``accessiblity`` total jobs available for each zone in the sepcified
+        time of day, the speficified mode and the specified travel time.
     """
-    
-    def catchment(row):
-        feature_point_geom = row.geometry
-        start = [feature_point_geom.x, feature_point_geom.y]
 
-        g = iso_drive(
-            modes = modes,
-            start = start,
-            date_time = date_time,
-            travel_ranges = travel_ranges,
-            api_key = api_key,
+     
+    if mode not in list(cs.otp_modes.keys()):
+        raise ValueError("{0} is an invalid travel mode.".format(mode))
+        
+    
+    if census.crs['init'] not in cs.WGS84['init']:
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
+        
+    if not date_time:
+        date_time = datetime.now()
+        
+    census['centroid'] = census.centroid
+    
+    def accessibility(row):
+        o = row['centroid']
+        gdf = gpd.GeoDataFrame({'geometry':[o]}, crs = cs.WGS84)
+        
+        if api == 'otp':
+            sa = fn_otp.otp_service_area(
+                in_gdf = gdf,
+                mode = mode, 
+                breaks = [travel_time],
+                date_time = date_time,
+            )
+        elif api == 'here':
+            sa = fn_here.here_service_area(
+                in_gdf = gdf,
+                mode = mode, 
+                breaks = [travel_time],
+                date_time = date_time,
+                api_key=api_key,
+            )
+
+        
+        emp = catchment_pop(
+            catchment = sa,
+            census = census, 
+            fields = fields,
+            show_progress = False,
         )
 
-        catchment = gpd.GeoDataFrame(g)
-        catchment = catchment_pop(catchment, census_gdf, fields)
+        if not emp.empty:
+            emp = emp[fields].iloc[0]
+        if emp.empty:
+            emp = pd.Series(dict.fromkeys(fields, 0))
+        
+        progress = (row.name+1)/len(census)*100
+        if show_progress == True and round(progress, 0)%10==0:
+            print('{0}% is done.'.format(round(progress, 1)))        
+        return emp
 
-        row = row.coombine_first(catchment.iloc[0])
-    
-    
-    census_gdf = census_gdf.apply(catchment, axis = 1)
 
-    return census_gdf 
+    columns = ['{0}_{1}_{2}'.format(mode, date_time.strftime('%Y%m%d_%H%M'), f) for f in fields]
+    df = census.apply(accessibility, axis=1)
+    df.columns = columns
+    census = census.join(df).copy()
+   
+    return census
     
     

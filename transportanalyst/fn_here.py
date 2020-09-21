@@ -3,11 +3,14 @@ Uses Here API to preform network analysis.
 """
 import pandas as pd
 import geopandas as gpd
+import zipfile
+import io
 import requests
+import tempfile
 
-from shapely import geometry
+import shapely.geometry as geom
+
 from datetime import datetime
-
 from . import constants as cs
 
 def here_route(
@@ -82,74 +85,111 @@ def here_route(
       
     return output
 
-def iso_drive(
-    date_time,
-    travel_ranges, #in minutes
-    modes,
-    start,
-    api_key,
+def here_service_area(
+    in_gdf,
+    mode, 
+    breaks,
+    id_field ='',
+    date_time = '',
+    api_key='',
+): 
 
-):
+    
     """
-    This function calculates a catchment (isochrone) from a location by any modes.
-    It uses Here API so an API key should be provided.
-
+    Return a GeoDataFrame of catchments for each point in 'in_gdf'.
     Parameters
     ----------
-    mode : Mode is a text string. 
-        The possible modes are:
-            1- 'drive_intraffic'
-            2- 'drive_freeflow'
-            3- 'walk'
-            4- 'cycle'
-            5- 'truck'
-    start : coorditate in WGS84 system
-        Start is a text string that shows a coorditate in WGS84 system.
-    date_time : text string.
-        The format for the date and time is yyyymmdd hh:mm.
+    in_gdf : GeoDataFrame
+        Contains a series of points and optionally a name for each point
+        as the origins of the catchment analysis.
+    id_field : string
+        id_field is the name of the field in 'in_gdf' that contains
+        the ids for each origin. Each point has to have a unique id.
+    mode : string
+        Indicates transport modes. Modes that can be used 
+        include 'public_transport', 'car_in_traffic', 'car_free_flow',
+        'walk', 'cycle'
+    breaks : list
+        A list of time breaks in minutes. A catchment for each time break
+        will be created for each origin.
+    date_time : a datetime object
+        Sets the start time of a trip. Only important if the mode is 
+        transit or a subset of transit. 
 
     Returns
     -------
-    A shaply polygon that shows the catchment in WGS84 coordinate system.
+    GeoDataFrame
+        Has the structure
+        -``time`` time break for the isochrone in seconds.
+        -``geometry`` Shaply polygon geometry
+        -``name`` name of the origin from the input 'id_field'.
+
     """
-    #reference mode: 
-    #  type: [ fastest | shortest | balanced ], 
-    #  TransportMode: [car | pedestrian | carHOV | publicTransport | publicTransportTimeTable | truck | bicycle ]
-    #  TrafficMode: [enabled | disabled | default]
+    # The mode parameter is not validated by the Maps API
+    # Check here to prevent silent failures.
+    if mode not in list(cs.here_modes.keys()):
+        raise ValueError("{0} is an invalid travel mode.".format(mode))
+    if mode in ['cycle', 'public_transport']:
+        raise ValueError("{0} is an invalid travel mode.".format(mode))
+        
+    if in_gdf.crs['init'] not in cs.WGS84['init']:
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
     
-    mode_dict = {
-        'drive_intraffic': 'fastest;car;traffic:enabled',
-        'drive_freeflow': 'fastest;car;traffic:disabled',
-        'walk': 'fastest;pedestrian',
-        'cycle':'fastest;bicycle',
-        'truck':'fastest;truck',
-    }
     
-    dt = '{0}-{1}-{2}T{3}:{4}:00'.format(
-        date_time[:4], 
-        date_time[4:6], 
-        date_time[6:8], 
-        date_time[9:11], 
-        date_time[:-2],
-    )
-    start = '{0},{1}'.format(start[1], start[0]) #'y,x'
-    travel_ranges = ','.join([str(i*60) for i in travel_ranges])
+    if date_time == '':
+        date_time = datetime.now()
+        
+    date_time = date_time.strftime('%Y-%m-%dT%H:%M:00')
     
-    for mode in modes:
-        p = {
-            'mode': mode_dict[mode],
+    if not id_field:
+        in_gdf = in_gdf.reset_index()
+        in_gdf = in_gdf.rename(columns={
+            'index': 'id_field',  
+        })
+        id_field = 'id_field'
+
+    #run for each single point in GeoDataFrame
+    url = 'https://isoline.route.ls.hereapi.com/routing/7.2/calculateisoline.json'
+    df_list = list()
+    for row in in_gdf.iterrows():
+        indx = row[0]
+        orig = row[1]['geometry']
+        
+        start = '{0},{1}'.format(orig.y, orig.x) #'y,x'
+        travel_ranges = ','.join([str(i*60) for i in breaks])
+    
+        query = {
+            'mode': cs.here_modes[mode],
             'start': start,
-            'departure': dt,
+            'departure': date_time,
             'rangetype': 'time',
             'range': travel_ranges, #in seconds
             'apiKey': api_key,
         }
 
-        url = 'https://isoline.route.ls.hereapi.com/routing/7.2/calculateisoline.json'
-        r = requests.get(url, params=p)
+        r = requests.get(url, params=query)
+
+        
         if r.status_code==200 and 'isoline' in r.json()['response']:
-            iso_list = r.json()['response']['isoline'][0]['component'][0]['shape']
-            g = geometry.Polygon([[float(i) for i in reversed(i.split(','))] for i in iso_list])
-        else:
-            g = geometry.Polygon()
-    return g
+            df = pd.DataFrame(r.json()['response']['isoline'])
+            df['geometry'] = df['component'].map(
+                lambda x: geom.Polygon(
+                    [[float(i) for i in reversed(i.split(','))] for i in x[0]['shape']]
+                )
+            )
+            df['name'] = row[1][id_field]
+            df = df.rename(columns={'range': 'time'})
+            df_list.append(df)
+
+            
+        
+        
+    if df_list:
+        df = pd.concat(df_list)   
+        df = df[df['geometry'].notnull()].copy()
+        gdf = gpd.GeoDataFrame(df[['name', 'time', 'geometry']], crs = cs.WGS84)
+    else:
+        gdf = gpd.GeoDataFrame(crs = cs.WGS84)
+            
+    return gdf
