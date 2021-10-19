@@ -54,4 +54,5 @@ otp_modes = {
 #Full otp modes: CAR, BUS, FERRY, RAIL, TRANSIT, WALK, BICYCLE, MULTIMODAL
 
 #: WGS84 coordinate reference system for Geopandas
-WGS84 = {'init': 'epsg:4326'}
+import geopandas as gpd
+WGS84 = gpd.GeoDataFrame({'geometry':[]}, crs = "EPSG:4326").crs

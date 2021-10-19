@@ -51,11 +51,11 @@ def catchment_pop(
         # Check the cooridnate system
         raise ValueError("Input GeoDataFrame must have a cooridnate system.")
         
-    if catchment.crs['init'] not in cs.WGS84['init']:
+    if catchment.crs.name != 'WGS 84':
         # Check the cooridnate is WGS84
         raise ValueError("Invalid coordinate system.")
         
-    if census.crs['init'] not in cs.WGS84['init']:
+    if census.crs.name != 'WGS 84':
         # Check the cooridnate is WGS84
         raise ValueError("Invalid coordinate system.")
         
@@ -102,7 +102,7 @@ def catchment_pop(
 
        
 
-def accessibility(
+def accessibility_polygon(
     census,
     fields,
     mode,
@@ -116,11 +116,11 @@ def accessibility(
     Adds accessiblity data to inuput census GeoDataFrame.
     Parameters
     ----------
-    in_gdf : GeoDataFrame
+    census : GeoDataFrame
         Contains census zone boundaries. The attribute data should have
         number of jobs for each zone.
     fields : A list of names of numerical fieds in census GeoDataFrame
-        fields are the name of the fields in 'in_gdf' that contains numerical
+        fields are the name of the fields in 'census' that contains numerical
         information such as total jobs for each zone.
     mode : string
         Indicates the mode of transport. It can include walk, cycle,
@@ -148,7 +148,7 @@ def accessibility(
         raise ValueError("{0} is an invalid travel mode.".format(mode))
         
     
-    if census.crs['init'] not in cs.WGS84['init']:
+    if census.crs.name != 'WGS 84':
         # Check the cooridnate is WGS84
         raise ValueError("Invalid coordinate system.")
         
@@ -203,4 +203,145 @@ def accessibility(
    
     return census
     
+def accessibility_point(
+    zone_centroids,
+    fields,
+    mode,
+    travel_time,
+    api,
+    api_key = '',
+    date_time = '',
+    show_progress = True,
+):
+    """
+    Adds accessiblity data to inuput census GeoDataFrame.
+    Parameters
+    ----------
+    zone_centroids : GeoDataFrame
+        Contains census zone centroids. The attribute data should have
+        number of jobs for each zone.
+    fields : A list of names of numerical fieds in census GeoDataFrame
+        fields are the name of the fields in 'zone_centroids' that contains numerical
+        information such as total jobs for each zone.
+    mode : string
+        Indicates the mode of transport. It can include walk, cycle,
+        public_transport.
+    travel_time : minutes
+        A time break in minutes. Shows maximum time someone is allowed to travel
+        to access a destination.
+    api : string
+        Defines the api that should be used for routing. 
+        The avialable apis are otp, here and google
+    date_time : a datetime object
+        Sets the start time of a trip. Only important if the mode is 
+        transit or a subset of transit.  
+
+    Returns
+    -------
+    GeoDataFrame
+        Has the ``zone_centroids`` structure and only adds one more field:
+        -``accessiblity`` total jobs available for each zone in the sepcified
+        time of day, the speficified mode and the specified travel time.
+    """
     
+         
+    if mode not in list(cs.otp_modes.keys()):
+        raise ValueError("{0} is an invalid travel mode.".format(mode))
+        
+    
+    if zone_centroids.crs.name != 'WGS 84':
+        # Check the cooridnate is WGS84
+        raise ValueError("Invalid coordinate system.")
+        
+    if not date_time:
+        date_time = datetime.now()
+    
+    zone_centroids['___uid___']= range(len(zone_centroids))
+
+    if api == 'otp':
+        sa = fn_otp.otp_service_area(
+            in_gdf = gdf,
+            id_field = '___uid___',
+            mode = mode, 
+            breaks = [travel_time],
+            date_time = date_time,
+        )
+    elif api == 'here':
+        sa = fn_here.here_service_area(
+            in_gdf = gdf,
+            id_field = '___uid___',
+            mode = mode, 
+            breaks = [travel_time],
+            date_time = date_time,
+            api_key=api_key,
+        )
+
+    gdf1 = gpd.overlay(zone_centroids, sa, how='intersection')
+    
+    def add_orig(group):
+        name = group.name
+        if name in group['___uid___'].values:
+            return group
+        else:
+            orig = gdf[gdf["___uid___"] == name].copy()
+            orig['name'] = name
+            group = group.append(orig)
+            return group
+
+    gdf2 = gdf1.groupby('name', group_keys=False).apply(add_orig)
+    gdf3 = gdf2.groupby('name', group_keys=False).agg({ i : 'sum' for i in fields })
+    columns = ['{0}_{1}_{2}'.format(mode, date_time.strftime('%Y%m%d_%H%M'), f) for f in fields]   
+    gdf3.columns = columns
+    gdf3 = gdf3.reset_index()
+    
+    gdf4 = zone_centroids.merge(gdf3, left_on = '___uid___', right_on = 'name', how = 'left')
+    gdf4 = gdf4.drop(['___uid___', 'name'], axis=1)
+    
+    return dgf4
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+    
+    
+
+
+   

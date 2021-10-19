@@ -203,7 +203,7 @@ def otp_service_area(
         raise ValueError("{0} is an invalid travel mode.".format(mode))
         
     
-    if in_gdf.crs['init'] not in cs.WGS84['init']:
+    if in_gdf.crs.name != 'WGS 84':
         # Check the cooridnate is WGS84
         raise ValueError("Invalid coordinate system.")
         
@@ -310,8 +310,8 @@ def od_matrix(
         sys.exit()
     
     #convert the geometry into a list of dictinoaries
-    origins = origins.to_crs({'init': 'epsg:4326'})
-    destinations = destinations.to_crs({'init': 'epsg:4326'})
+    origins = origins.to_crs(cs.WGS84)
+    destinations = destinations.to_crs(cs.WGS84)
     
     od_list = list()
     cnt = 0
@@ -347,7 +347,7 @@ def od_matrix(
                 [[o[1], o[2]],
                  [d[1], d[2]]],
                 columns = ['geometry', 'location Name'])
-            od = gpd.GeoDataFrame(od, crs = {'init': 'epsg:4326'})
+            od = gpd.GeoDataFrame(od, crs = cs.WGS84)
             r = route(
                 locations_gdf = od, #a pair of locations in geodataframe fromat
                 mode = mode,
@@ -362,7 +362,7 @@ def od_matrix(
         print("calculating {0} ODs, remaining origins {1}, estimated remaining time: {2}".format(selected_destinations.shape[0], origins.shape[0] - cnt, eta - t_delta))
 
     od_df = pd.concat(od_list).reset_index(drop = True)
-    od_gdf = gpd.GeoDataFrame(od_df, crs = {'init': 'epsg:4326'})
+    od_gdf = gpd.GeoDataFrame(od_df, crs = cs.WGS84)
     print("Elapsed time was {0} seconds".format(datetime.now() - t1))
     
     return od_gdf

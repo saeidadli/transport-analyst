@@ -56,7 +56,7 @@ def here_route(
     if mode not in list(cs.here_modes.keys()):
         raise ValueError("{0} is an invalid travel mode.".format(mode))
 
-    if in_gdf.crs['init'] not in cs.WGS84['init']:
+    if in_gdf.crs.name != 'WGS 84':
         # Check the cooridnate is WGS84
         raise ValueError("Invalid coordinate system.")
     
@@ -132,7 +132,7 @@ def here_service_area(
     if mode in ['cycle', 'public_transport']:
         raise ValueError("{0} is an invalid travel mode.".format(mode))
         
-    if in_gdf.crs['init'] not in cs.WGS84['init']:
+    if in_gdf.crs.name != 'WGS 84':
         # Check the cooridnate is WGS84
         raise ValueError("Invalid coordinate system.")
     
