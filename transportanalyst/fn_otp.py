@@ -258,7 +258,9 @@ def otp_service_area(
         df = pd.concat(iso_list) 
         if not df.empty:
             df = df[df['geometry'].notnull()].copy()
-            gdf = gpd.GeoDataFrame(df, crs = cs.WGS84).copy()
+            gdf = gpd.GeoDataFrame(df).copy()
+            gdf = gdf.set_crs(cs.WGS84, allow_override=True)
+            #gdf = gpd.GeoDataFrame(df, crs = cs.WGS84).copy()
         else:
             gdf = gpd.GeoDataFrame(crs = cs.WGS84)
     else:
