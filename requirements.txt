@@ -3,6 +3,6 @@ googlemaps==4.4.1
 json==0.8.5
 pandas==0.25.3
 pathlib==2.3.5
-requests==2.22.0
+requests==2.31.0
 shapely==1.6.4
 tempfile==3.8.5
